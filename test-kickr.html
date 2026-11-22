@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Test KICKR Core 2</title>
+<style>
+:root{--bg:#f3f5f2;--fg:#14211b;--mut:#5b6b62;--card:#ffffff;--line:#d3dbd5;--acc:#0b7a4b;--accfg:#ffffff;--bad:#b3261e;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;--bg:#0f1713;--fg:#e8efe9;--mut:#93a59a;--card:#18231d;--line:#2a3a31;--acc:#3ddc97;--accfg:#06241a;--bad:#ff8a80}}
+:root[data-theme="dark"]{color-scheme:dark;--bg:#0f1713;--fg:#e8efe9;--mut:#93a59a;--card:#18231d;--line:#2a3a31;--acc:#3ddc97;--accfg:#06241a;--bad:#ff8a80}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;font-size:18px}
+main{max-width:640px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:28px;margin:0 0 4px;font-weight:700}
+p{margin:0 0 14px;color:var(--mut);font-family:system-ui,sans-serif;font-size:15px;line-height:1.45}
+button{font:inherit;font-weight:700;background:var(--acc);color:var(--accfg);border:0;border-radius:10px;padding:14px 20px;min-height:48px;cursor:pointer}
+button:focus-visible,input:focus-visible{outline:3px solid var(--fg);outline-offset:2px}
+button:disabled{opacity:.45}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin:18px 0}
+.m{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+.m b{display:block;font-size:56px;line-height:1;font-variant-numeric:tabular-nums}
+.m span{color:var(--mut);font-size:16px}
+.ctl{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:14px}
+.ctl label{display:flex;justify-content:space-between;margin-bottom:8px}
+input[type=range]{width:100%;min-height:36px}
+#st{font-family:system-ui,sans-serif;font-size:15px;margin:12px 0;min-height:22px}
+#log{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--mut);white-space:pre-wrap;max-height:180px;overflow:auto;border-top:1px solid var(--line);padding-top:10px}
+</style>
+</head>
+<body>
+<main>
+<h1>Test de connexion KICKR</h1>
+<p>Ouvre cette page dans Bluefy, réveille le home-trainer en pédalant, puis appuie sur Connecter. Ferme Zwift et l’app Wahoo avant.</p>
+<button id="go">Connecter le home-trainer</button>
+<div id="st" role="status"></div>
+<div class="grid">
+<div class="m"><b id="w">–</b><span>watts</span></div>
+<div class="m"><b id="c">–</b><span>tours/min</span></div>
+<div class="m"><b id="s">–</b><span>km/h</span></div>
+<div class="m"><b id="g">0</b><span>pente envoyée (%)</span></div>
+</div>
+<div class="ctl">
+<label for="gr"><span>Pente simulée</span><span id="grv">0 %</span></label>
+<input id="gr" type="range" min="-10" max="15" step="0.5" value="0" disabled>
+</div>
+<div id="log"></div>
+</main>
+<script>
+(function(){
+var $=function(i){return document.getElementById(i)};
+var st=$("st"),logEl=$("log"),cp=null,timer=null;
+function log(t){logEl.textContent=t+"\n"+logEl.textContent}
+function status(t,bad){st.textContent=t;st.style.color=bad?"var(--bad)":"var(--fg)"}
+function show(w,c,s){
+ if(w!=null)$("w").textContent=Math.round(w);
+ if(c!=null)$("c").textContent=Math.round(c);
+ if(s!=null)$("s").textContent=s.toFixed(1);
+}
+function parseBike(e){
+ var d=e.target.value,o=0,f=d.getUint16(0,true);o=2;
+ var sp=null,cad=null,pw=null;
+ if(!(f&1)){sp=d.getUint16(o,true)/100;o+=2}
+ if(f&2)o+=2;
+ if(f&4){cad=d.getUint16(o,true)/2;o+=2}
+ if(f&8)o+=2;
+ if(f&16)o+=3;
+ if(f&32)o+=2;
+ if(f&64){pw=d.getInt16(o,true);o+=2}
+ show(pw,cad,sp);
+}
+function parsePower(e){
+ var d=e.target.value;show(d.getInt16(2,true),null,null);
+}
+async function sendGrade(){
+ if(!cp)return;
+ var g=parseFloat($("gr").value);
+ $("grv").textContent=g.toFixed(1)+" %";$("g").textContent=g.toFixed(1);
+ var b=new DataView(new ArrayBuffer(7));
+ b.setUint8(0,0x11);b.setInt16(1,0,true);b.setInt16(3,Math.round(g*100),true);b.setUint8(5,40);b.setUint8(6,51);
+ try{await cp.writeValueWithResponse(b.buffer);log("Pente envoyée : "+g+" %")}
+ catch(err){log("Erreur pente : "+err.message)}
+}
+$("gr").addEventListener("input",function(){
+ clearTimeout(timer);timer=setTimeout(sendGrade,250);
+ $("grv").textContent=parseFloat(this.value).toFixed(1)+" %";
+});
+$("go").addEventListener("click",async function(){
+ if(!navigator.bluetooth){status("Le Bluetooth Web n’est pas disponible ici. Ouvre la page dans Bluefy.",true);return}
+ try{
+  status("Recherche en cours…");
+  var dev=await navigator.bluetooth.requestDevice({
+   filters:[{services:[0x1826]},{services:[0x1818]}],
+   optionalServices:[0x1826,0x1818]});
+  log("Appareil : "+(dev.name||"sans nom"));
+  dev.addEventListener("gattserverdisconnected",function(){status("Déconnecté.",true);$("gr").disabled=true;cp=null});
+  var srv=await dev.gatt.connect();
+  var ok=false;
+  try{
+   var ftms=await srv.getPrimaryService(0x1826);
+   var bike=await ftms.getCharacteristic(0x2AD2);
+   bike.addEventListener("characteristicvaluechanged",parseBike);
+   await bike.startNotifications();ok=true;log("FTMS : données reçues");
+   try{
+    cp=await ftms.getCharacteristic(0x2AD9);
+    await cp.startNotifications();
+    cp.addEventListener("characteristicvaluechanged",function(e){
+     var v=new Uint8Array(e.target.value.buffer);log("Réponse contrôle : "+Array.from(v).join(","))});
+    await cp.writeValueWithResponse(new Uint8Array([0x00]));
+    await cp.writeValueWithResponse(new Uint8Array([0x07]));
+    $("gr").disabled=false;log("Contrôle de la résistance prêt");
+   }catch(e2){cp=null;log("Pas de contrôle de résistance : "+e2.message)}
+  }catch(e1){log("FTMS indisponible : "+e1.message)}
+  if(!ok){
+   var ps=await srv.getPrimaryService(0x1818);
+   var pm=await ps.getCharacteristic(0x2A63);
+   pm.addEventListener("characteristicvaluechanged",parsePower);
+   await pm.startNotifications();log("Puissance seule (profil Cycling Power)");
+  }
+  status("Connecté à "+(dev.name||"l’appareil")+". Pédale pour voir les valeurs.");
+ }catch(err){status("Échec : "+err.message,true);log(String(err))}
+});
+})();
+</script>
+</body>
+</html>
